@@ -111,7 +111,7 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
         // ToDo: Remove lost nodes from ReplicationStateByNode (after some idle time)
 
         // ToDo: Perhaps run in a separate task loop
-        idleRun &= await TryApplyLogs().ConfigureAwait(false);
+        idleRun |= await TryApplyLogs().ConfigureAwait(false);
 
         // idle run
         return idleRun;
