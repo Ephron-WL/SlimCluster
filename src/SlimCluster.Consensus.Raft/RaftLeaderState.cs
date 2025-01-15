@@ -79,7 +79,6 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
 
         var lastIndex = _logRepository.LastIndex;
         var now = _time.Now;
-        var idleRun = false;
 
         // for each cluster member - replicate logs 
         foreach (var member in _clusterMembership.OtherMembers)
@@ -105,13 +104,12 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
         {
             // idle run if all were idle runs
             await Task.WhenAll(tasks);
-            idleRun = false;
         }
 
         // ToDo: Remove lost nodes from ReplicationStateByNode (after some idle time)
 
         // ToDo: Perhaps run in a separate task loop
-        idleRun &= await TryApplyLogs().ConfigureAwait(false);
+        var idleRun = await TryApplyLogs().ConfigureAwait(false);
 
         // idle run
         return idleRun;
@@ -127,7 +125,7 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
 
         var commitedIndex = _logRepository.CommitedIndex;
         var highestReplicatedIndex = FindMajorityReplicatedIndex();
-        if (highestReplicatedIndex > commitedIndex)
+        if (highestReplicatedIndex >= commitedIndex)
         {
             await ApplyLogs(commitedIndex, highestReplicatedIndex).ConfigureAwait(false);
             idleRun = false;
@@ -159,16 +157,24 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
         }
     }
 
-    private int FindMajorityReplicatedIndex()
+    private int GetMajorityCountMinusOne()
     {
         var majorityCount = _options.NodeCount / 2;
+           
+        return majorityCount;
+    }
+
+    private int FindMajorityReplicatedIndex()
+    {
+        var majorityCount = GetMajorityCountMinusOne();
 
         // ToDo: Do not take into acount inactive members
         var orderedMatchIndexes = ReplicationStateByNode.Values.Select(x => x.MatchIndex).OrderByDescending(x => x).ToList();
 
         var majorityMatchIndex = orderedMatchIndexes.FirstOrDefault(matchIndex =>
         {
-            return orderedMatchIndexes.Count(x => x >= matchIndex) > majorityCount;
+            // This considers members that have left.
+            return orderedMatchIndexes.Count(x => x >= matchIndex) + _options.NodeCount - _clusterMembership.Members.Count > majorityCount;
         });
 
         return Math.Max(majorityMatchIndex, _logRepository.CommitedIndex);
@@ -260,6 +266,12 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
     {
         using var _ = _logger.BeginScope("Command {Command} processing", command.GetType().Name);
 
+        var majorityCount = GetMajorityCountMinusOne();
+        if (_clusterMembership.Members.Count <= majorityCount)
+        {
+            throw new ClusterException("This node is not a member of a cluster having a quorum. While trying again may result in routing to a node having a quorum, there is no guarantee this will occur. To resolve, increase the number of nodes running in the cluster or address a possible network fragmentation.");
+        }
+
         // Append log to local node (must be thread-safe)
         var log = _logSerializer.Serialize(command);
         var commandIndex = await _logRepository.Append(Term, log);
@@ -285,6 +297,14 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
                     return result;
                 }
             }
+        }
+        catch (Exception ex)
+        {
+            if(ex is OperationCanceledException)
+            {
+                throw new ClusterException();
+            }
+            throw;
         }
         finally
         {

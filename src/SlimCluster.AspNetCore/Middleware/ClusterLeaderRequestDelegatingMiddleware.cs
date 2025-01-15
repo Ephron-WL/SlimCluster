@@ -1,5 +1,8 @@
 ﻿namespace SlimCluster.AspNetCore;
 
+using System.Net.Mime;
+using System.Text.Json;
+
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 
@@ -22,23 +25,40 @@ public class ClusterLeaderRequestDelegatingMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        // Check if request should be routed to leader
-        if (_options.DelegateRequestToLeader != null && _options.DelegateRequestToLeader(context.Request))
+        try
         {
-            var leaderAddress = _cluster.LeaderNode?.Address;
-            if (leaderAddress == null)
+            // Check if request should be routed to leader
+            if (_options.DelegateRequestToLeader != null && _options.DelegateRequestToLeader(context.Request))
             {
-                throw new ClusterException("Leader not known at this time, retry request later on when leader is established");
-            }
+                var leaderAddress = _cluster.LeaderNode?.Address;
+                if (leaderAddress == null)
+                {
+                    throw new ClusterException("Cluster membership in transition. Leader is not known at this time. Retry request.");
+                }
 
-            if (!_cluster.SelfNode.Equals(_cluster.LeaderNode))
+                if (!_cluster.SelfNode.Equals(_cluster.LeaderNode))
+                {
+                    // This is a follower, so need to delegate the call to the leader
+                    await _requestDelegatingClient.Delegate(context.Request, context.Response, leaderAddress, localPort: context.Connection.LocalPort);
+                    return;
+                }
+            }
+            // Not subject for routing, or this is the leader node (safe to pass the request processing by self)
+            await _next(context);
+           
+        }
+        catch (Exception ex)
+        {
+            if(ex is ClusterException)
             {
-                // This is a follower, so need to delegate the call to the leader
-                await _requestDelegatingClient.Delegate(context.Request, context.Response, leaderAddress, localPort: context.Connection.LocalPort);
+                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                context.Response.ContentType = MediaTypeNames.Application.Json;
+                var payload = JsonSerializer.Serialize(new { ex.Message, ExceptionType = ex.GetType().Name });
+                context.Response.ContentLength = payload.Length;
+                await context.Response.WriteAsync(payload);
                 return;
             }
+            throw;
         }
-        // Not subject for routing, or this is the leader node (safe to pass the request processing by self)
-        await _next(context);
     }
 }

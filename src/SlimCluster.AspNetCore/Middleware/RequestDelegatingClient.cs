@@ -70,22 +70,40 @@ public class RequestDelegatingClient
         }
 
         _logger.LogInformation("Delegating the request {RequestUri} to the leader node", uri);
-        using var delegatedResponse = await _client.SendAsync(delegatedRequest);
-
-        response.StatusCode = (int)delegatedResponse.StatusCode;
-
-        foreach (var header in delegatedResponse.Headers)
+        try
         {
-            _logger.LogTrace("Passing response header {HeaderName}", header.Key);
-            ///context.Response.Headers.Add(header.Key, new HeaderStringValues(){ header.Value);
+            using var delegatedResponse = await _client.SendAsync(delegatedRequest);
+
+            if(delegatedResponse.StatusCode == System.Net.HttpStatusCode.NoContent)
+            {
+                throw new ClusterException();
+            }
+
+            response.StatusCode = (int)delegatedResponse.StatusCode;
+
+            foreach (var header in delegatedResponse.Headers)
+            {
+                _logger.LogTrace("Passing response header {HeaderName}", header.Key);
+                ///context.Response.Headers.Add(header.Key, new HeaderStringValues(){ header.Value);
+            }
+
+            response.ContentLength = delegatedResponse.Content.Headers.ContentLength;
+            response.ContentType = delegatedResponse.Content.Headers.ContentType?.ToString();
+
+            if (delegatedResponse.Content != null)
+            {
+                await delegatedResponse.Content.CopyToAsync(response.Body);
+            }
         }
-
-        response.ContentLength = delegatedResponse.Content.Headers.ContentLength;
-        response.ContentType = delegatedResponse.Content.Headers.ContentType?.ToString();
-
-        if (delegatedResponse.Content != null)
+        catch (Exception ex)
         {
-            await delegatedResponse.Content.CopyToAsync(response.Body);
+            if (ex is HttpRequestException && ex.Message.StartsWith("No route to host") ||
+                ex is TaskCanceledException && ex.InnerException is TimeoutException ||
+                ex is ClusterException)
+            {
+                throw new ClusterException("Cluster membership in transition. The leader could not be contacted. Retry request.", ex);
+            }
+            throw;
         }
     }
 

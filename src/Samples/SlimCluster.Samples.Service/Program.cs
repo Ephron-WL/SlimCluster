@@ -51,10 +51,10 @@ builder.Services.AddSlimCluster(cfg =>
         opts.NodeCount = 3;
 
         // Use custom values or remove and use defaults
-        opts.LeaderTimeout = TimeSpan.FromSeconds(5);
-        opts.LeaderPingInterval = TimeSpan.FromSeconds(2);
-        opts.ElectionTimeoutMin = TimeSpan.FromSeconds(3);
-        opts.ElectionTimeoutMax = TimeSpan.FromSeconds(6);
+        opts.LeaderTimeout = TimeSpan.FromSeconds(5f/8);
+        opts.LeaderPingInterval = TimeSpan.FromSeconds(2f/8);
+        opts.ElectionTimeoutMin = TimeSpan.FromSeconds(3f/8);
+        opts.ElectionTimeoutMax = TimeSpan.FromSeconds(6f/8);
         // Can set a different log serializer, by default ISerializer is used (in our setup its JSON)
         // opts.LogSerializerType = typeof(JsonSerializer);
     });
