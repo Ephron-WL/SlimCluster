@@ -79,7 +79,6 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
 
         var lastIndex = _logRepository.LastIndex;
         var now = _time.Now;
-        var idleRun = false;
 
         // for each cluster member - replicate logs 
         foreach (var member in _clusterMembership.OtherMembers)
@@ -105,13 +104,12 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
         {
             // idle run if all were idle runs
             await Task.WhenAll(tasks);
-            idleRun = false;
         }
 
         // ToDo: Remove lost nodes from ReplicationStateByNode (after some idle time)
 
         // ToDo: Perhaps run in a separate task loop
-        idleRun |= await TryApplyLogs().ConfigureAwait(false);
+        var idleRun = await TryApplyLogs().ConfigureAwait(false);
 
         // idle run
         return idleRun;
@@ -168,7 +166,7 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
 
         var majorityMatchIndex = orderedMatchIndexes.FirstOrDefault(matchIndex =>
         {
-            return orderedMatchIndexes.Count(x => x >= matchIndex) > majorityCount;
+            return orderedMatchIndexes.Count(x => x >= matchIndex) + _options.NodeCount - _clusterMembership.Members.Count > majorityCount;
         });
 
         return Math.Max(majorityMatchIndex, _logRepository.CommitedIndex);
@@ -285,6 +283,14 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
                     return result;
                 }
             }
+        }
+        catch (Exception ex)
+        {
+            if(ex is OperationCanceledException)
+            {
+                throw new ClusterException();
+            }
+            throw;
         }
         finally
         {
