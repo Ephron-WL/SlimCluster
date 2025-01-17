@@ -125,7 +125,7 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
 
         var commitedIndex = _logRepository.CommitedIndex;
         var highestReplicatedIndex = FindMajorityReplicatedIndex();
-        if (highestReplicatedIndex > commitedIndex)
+        if (highestReplicatedIndex >= commitedIndex)
         {
             await ApplyLogs(commitedIndex, highestReplicatedIndex).ConfigureAwait(false);
             idleRun = false;
@@ -157,15 +157,23 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
         }
     }
 
-    private int FindMajorityReplicatedIndex()
+    private int GetMajorityCountMinusOne()
     {
         var majorityCount = _options.NodeCount / 2;
+           
+        return majorityCount;
+    }
+
+    private int FindMajorityReplicatedIndex()
+    {
+        var majorityCount = GetMajorityCountMinusOne();
 
         // ToDo: Do not take into acount inactive members
         var orderedMatchIndexes = ReplicationStateByNode.Values.Select(x => x.MatchIndex).OrderByDescending(x => x).ToList();
 
         var majorityMatchIndex = orderedMatchIndexes.FirstOrDefault(matchIndex =>
         {
+            // This considers members that have left.
             return orderedMatchIndexes.Count(x => x >= matchIndex) + _options.NodeCount - _clusterMembership.Members.Count > majorityCount;
         });
 
@@ -257,6 +265,12 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
     public async Task<object?> OnClientRequest(object command, CancellationToken token)
     {
         using var _ = _logger.BeginScope("Command {Command} processing", command.GetType().Name);
+
+        var majorityCount = GetMajorityCountMinusOne();
+        if (_clusterMembership.Members.Count <= majorityCount)
+        {
+            throw new ClusterException("This node is not a member of a cluster having a quorum. While trying again may result in routing to a node having a quorum, there is no guarantee this will occur. To resolve, increase the number of nodes running in the cluster or address a possible network fragmentation.");
+        }
 
         // Append log to local node (must be thread-safe)
         var log = _logSerializer.Serialize(command);

@@ -1,9 +1,9 @@
 ﻿namespace SlimCluster.AspNetCore;
 
+using System.Net.Mime;
 using System.Text.Json;
 
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 using SlimCluster.Consensus.Raft;
@@ -52,10 +52,11 @@ public class ClusterLeaderRequestDelegatingMiddleware
             if(ex is ClusterException)
             {
                 context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                context.Response.ContentType = "application/json";
-                string payload = JsonSerializer.Serialize(new { ex.Message, ExceptionType = ex.GetType().Name });
+                context.Response.ContentType = MediaTypeNames.Application.Json;
+                var payload = JsonSerializer.Serialize(new { ex.Message, ExceptionType = ex.GetType().Name });
                 context.Response.ContentLength = payload.Length;
                 await context.Response.WriteAsync(payload);
+                return;
             }
             throw;
         }
