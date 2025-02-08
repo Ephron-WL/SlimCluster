@@ -7,8 +7,8 @@ using SlimCluster.Transport.Ip;
 
 public class RaftNodeProxy : RaftNode
 {
-    public RaftNodeProxy(ILoggerFactory loggerFactory, IServiceProvider serviceProvider, IClusterMembership clusterMembership, ITime time, ILogRepository logRepository, IMessageSender messageSender, IStateMachine stateMachine, IOptions<RaftConsensusOptions> options)
-        : base(loggerFactory, serviceProvider, clusterMembership, time, logRepository, messageSender, stateMachine, options)
+    public RaftNodeProxy(ILoggerFactory loggerFactory, IServiceProvider serviceProvider, IClusterMembership clusterMembership, ITime time, ILogRepository logRepository, IMessageSender messageSender, IStateMachine stateMachine, IOptions<RaftConsensusOptions> options, IOptions<ClusterOptions> clusterOptions)
+        : base(loggerFactory, serviceProvider, clusterMembership, time, logRepository, messageSender, stateMachine, options, clusterOptions)
     {
     }
 
@@ -35,7 +35,7 @@ public class RaftNodeTests : AbstractRaftIntegrationTest, IAsyncLifetime
 
     public RaftNodeTests()
     {
-        _subject = new RaftNodeProxy(NullLoggerFactory.Instance, _serviceProviderMock.Object, _clusterMembershipMock.Object, _timeMock.Object, _logRepositoryMock.Object, _messageSenderMock.Object, _stateMachineMock.Object, Options.Create(_options));
+        _subject = new RaftNodeProxy(NullLoggerFactory.Instance, _serviceProviderMock.Object, _clusterMembershipMock.Object, _timeMock.Object, _logRepositoryMock.Object, _messageSenderMock.Object, _stateMachineMock.Object, Options.Create(_options), Options.Create(_clusterOptions));
     }
 
     public Task InitializeAsync() => Task.CompletedTask;
@@ -170,7 +170,7 @@ public class RaftNodeTests : AbstractRaftIntegrationTest, IAsyncLifetime
                     x => x.SendRequest(
                         It.Is<AppendEntriesRequest>(r => r.Term == candidateTerm && r.LeaderId == _selfMember.Node.Id),
                         member.Node.Address,
-                        _options.LeaderPingInterval),
+                        _options.HeartbeatInterval),
                     Times.Once);
             }
         }

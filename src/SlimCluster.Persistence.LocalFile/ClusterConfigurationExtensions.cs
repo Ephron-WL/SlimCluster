@@ -13,6 +13,7 @@ public static class ClusterConfigurationExtensions
     {
         cfg.PostConfigurationActions.Add(services =>
         {
+            Console.WriteLine($"AddPersistenceUsingLocalFile file path: {filePath}");
             services.TryAddTransient(svp => new LocalJsonFileClusterPersistenceService(svp.GetServices<IDurableComponent>(), filePath, formatting));
             services.TryAddTransient<IClusterPersistenceService>(svp => svp.GetRequiredService<LocalJsonFileClusterPersistenceService>());
         });

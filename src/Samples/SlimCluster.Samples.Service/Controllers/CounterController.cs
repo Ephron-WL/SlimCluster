@@ -27,8 +27,18 @@ public class CounterController : ControllerBase
     [ProducesResponseType(typeof(int), StatusCodes.Status200OK)]
     public async Task<int?> Increment(CancellationToken cancellationToken)
     {
-        var result = await _clientRequestHandler.OnClientRequest(new IncrementCounterCommand(), cancellationToken);
-        return (int?)result;
+        int? result = null;
+        try
+        {
+            result = (int?)await _clientRequestHandler.OnClientRequest(new IncrementCounterCommand(), cancellationToken);
+            result ??= -1;
+        }
+        catch (Exception ex) 
+        {
+            throw;
+        }
+
+        return result;
     }
 
     [HttpPost("[action]")]
@@ -45,5 +55,21 @@ public class CounterController : ControllerBase
     {
         var result = await _clientRequestHandler.OnClientRequest(new ResetCounterCommand(), cancellationToken);
         return (int?)result;
+    }
+
+    [HttpPost("[action]")]
+    [ProducesResponseType(typeof(bool), StatusCodes.Status200OK)]
+    public async Task<bool?> LockRequest([FromBody] LockRequestCommand command, CancellationToken cancellationToken)
+    {
+        var result = await _clientRequestHandler.OnClientRequest(command, cancellationToken);
+        return (bool?)result;
+    }
+
+    [HttpPost("[action]")]
+    [ProducesResponseType(typeof(bool), StatusCodes.Status200OK)]
+    public async Task<bool?> LockRelease([FromBody] LockReleaseCommand command, CancellationToken cancellationToken)
+    {
+        var result = await _clientRequestHandler.OnClientRequest(command, cancellationToken);
+        return (bool?)result;
     }
 }

@@ -9,6 +9,7 @@ public abstract class AbstractRaftIntegrationTest
 {
     protected readonly IFixture _fixture;
     protected readonly RaftConsensusOptions _options;
+    protected readonly ClusterOptions _clusterOptions;
     protected readonly Mock<IServiceProvider> _serviceProviderMock;
     protected readonly Mock<IStateMachine> _stateMachineMock;
     protected readonly Mock<IClusterMembership> _clusterMembershipMock;
@@ -35,6 +36,8 @@ public abstract class AbstractRaftIntegrationTest
         {
             NodeCount = 3
         };
+
+        _clusterOptions = new();
 
         static Node GetNode(int i) => new($"Node-{i:00}", $"192.168.1.{i}", 6200);
 

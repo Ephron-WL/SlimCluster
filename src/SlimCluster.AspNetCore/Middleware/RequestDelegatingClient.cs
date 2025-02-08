@@ -57,7 +57,7 @@ public class RequestDelegatingClient
 
             var ms = new MemoryStream((int?)request.ContentLength ?? 1024);
             await request.Body.CopyToAsync(ms);
-
+            ms.Position=0;
             delegatedRequest.Content = new StreamContent(ms);
             if (request.ContentType != null)
             {
@@ -72,10 +72,13 @@ public class RequestDelegatingClient
         _logger.LogInformation("Delegating the request {RequestUri} to the leader node", uri);
         try
         {
+
+
             using var delegatedResponse = await _client.SendAsync(delegatedRequest);
 
             if(delegatedResponse.StatusCode == System.Net.HttpStatusCode.NoContent)
             {
+                _logger.LogInformation("StatusCode: No Content.", uri);
                 throw new ClusterException();
             }
 
@@ -95,14 +98,20 @@ public class RequestDelegatingClient
                 await delegatedResponse.Content.CopyToAsync(response.Body);
             }
         }
-        catch (Exception ex)
+        catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException)
         {
-            if (ex is HttpRequestException && ex.Message.StartsWith("No route to host") ||
-                ex is TaskCanceledException && ex.InnerException is TimeoutException ||
-                ex is ClusterException)
-            {
-                throw new ClusterException("Cluster membership in transition. The leader could not be contacted. Retry request.", ex);
-            }
+            throw new ClusterException($"An attempt by a follower node to redirect the command to the leader node failed because the leader did not respond within the timeout period. Try again. Message: ({ex.Message})", ex);
+        }
+        catch (HttpRequestException ex) when (ex.Message.StartsWith("No route to host"))
+        {
+            throw new ClusterException($"An attempt by a follower node to redirect the command to the leader node failed because the leader appears offline. Try again. Message: ({ex.Message})", ex);
+        }
+        catch (ClusterException ex)
+        {
+            throw new ClusterException($"Cluster membership in transition. The leader could not be contacted. Retry request. Message: ({ex.Message})", ex);
+        }
+        catch
+        {
             throw;
         }
     }

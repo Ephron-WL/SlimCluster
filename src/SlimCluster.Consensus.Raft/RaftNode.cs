@@ -20,7 +20,9 @@ public class RaftNode : TaskLoop, IMessageArrivedHandler, IAsyncDisposable, IDur
     private readonly IClusterMembership _clusterMembership;
     private readonly IMessageSender _messageSender;
     private readonly RaftConsensusOptions _options;
+    private readonly ClusterOptions _clusterOptions;
     private readonly ISerializer _logSerializer;
+    private readonly IClusterPersistenceService _clusterPersistenceService;
     private readonly ITime _time;
     private readonly IStateMachine _stateMachine;
 
@@ -71,22 +73,39 @@ public class RaftNode : TaskLoop, IMessageArrivedHandler, IAsyncDisposable, IDur
         ILoggerFactory loggerFactory,
         IServiceProvider serviceProvider,
         IClusterMembership clusterMembership,
+        // IClusterPersistenceService clusterPersistenceService,
         ITime time,
         ILogRepository logRepository,
         IMessageSender messageSender,
         IStateMachine stateMachine,
-        IOptions<RaftConsensusOptions> options)
-        : base(loggerFactory.CreateLogger<RaftNode>())
+        IOptions<RaftConsensusOptions> options,
+        IOptions<ClusterOptions> clusterOptions)
+        : base(loggerFactory.CreateLogger<RaftNode>(), clusterOptions.Value)
     {
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _logger = loggerFactory.CreateLogger<RaftNode>();
+
+        _service = new Lazy<IClusterPersistenceService>(() => _serviceProvider.GetService<IClusterPersistenceService>());
+
+        //if (serviceProvider.GetService<IClusterPersistenceService>() is null)
+        //{
+        //    _logger.LogInformation("IClusterPersistenceService is not available.");
+        //}
+        //else
+        //{
+        //    _logger.LogInformation("IClusterPersistenceService is available.");
+        //}
+
         _clusterMembership = clusterMembership;
+        //_clusterPersistenceService = clusterPersistenceService;
         _time = time;
         _logRepository = logRepository;
         _messageSender = messageSender;
         _stateMachine = stateMachine;
         _options = options.Value;
+
+        _clusterOptions = clusterOptions.Value;
 
         _logSerializer = (ISerializer)_serviceProvider.GetRequiredService(_options.LogSerializerType);
 
@@ -114,6 +133,13 @@ public class RaftNode : TaskLoop, IMessageArrivedHandler, IAsyncDisposable, IDur
         GC.SuppressFinalize(this);
     }
 
+    private TimeSpan NewElectionTime()
+    {
+        var randomFactor = new Random().NextDouble();
+        var randomInterval = _options.ElectionTimeoutMax.Subtract(_options.ElectionTimeoutMin).Multiply(randomFactor);
+        return randomInterval;
+    }
+
     protected async Task StartElection()
     {
         _logger.LogInformation("Starting election for term {Term}", _currentTerm + 1);
@@ -123,9 +149,7 @@ public class RaftNode : TaskLoop, IMessageArrivedHandler, IAsyncDisposable, IDur
         // advance term
         UpdateTerm(_currentTerm + 1);
 
-        var randomFactor = new Random().NextDouble();
-        var randomInterval = _options.ElectionTimeoutMax.Subtract(_options.ElectionTimeoutMin).Multiply(randomFactor);
-        _candidateState = new RaftCandidateState(_currentTerm, _time.Now.Add(_options.ElectionTimeoutMin).Add(randomInterval));
+        _candidateState = new RaftCandidateState(_currentTerm, _time.Now.Add(NewElectionTime()));
 
         // vote for self
         _votedFor = _clusterMembership.SelfMember.Node.Id;
@@ -146,7 +170,7 @@ public class RaftNode : TaskLoop, IMessageArrivedHandler, IAsyncDisposable, IDur
 
         UpdateTerm(term);
 
-        _followerState = new RaftFollowerState(_loggerFactory.CreateLogger<RaftFollowerState>(), _options, _time, _currentTerm, null);
+        _followerState = new RaftFollowerState(_loggerFactory.CreateLogger<RaftFollowerState>(), NewElectionTime(), _time, _currentTerm, null);
     }
 
     private async Task ClearPreviousState()
@@ -171,8 +195,11 @@ public class RaftNode : TaskLoop, IMessageArrivedHandler, IAsyncDisposable, IDur
 
         _leaderState = new RaftLeaderState(
             _loggerFactory.CreateLogger<RaftLeaderState>(),
+            _serviceProvider,
             CurrentTerm,
             _options,
+            _clusterOptions,
+         //   _clusterPersistenceService,
             _clusterMembership,
             _messageSender,
             _logRepository,
@@ -306,10 +333,11 @@ public class RaftNode : TaskLoop, IMessageArrivedHandler, IAsyncDisposable, IDur
 
         if (r.Entries != null && r.Entries.Count > 0)
         {
+            _logger.LogInformation($"RaftNode Received log entries {counter}");
             await _logRepository.Append(r.Entries);
         }
 
-        // Confirm all was good
+        // Confirm all was good (logs received is satisfactory for this application)
         await SendAppendEntriesResponse(r, node, success: true);
 
         // Apply logs in the local state machine if leader has a higher commit index
@@ -322,10 +350,16 @@ public class RaftNode : TaskLoop, IMessageArrivedHandler, IAsyncDisposable, IDur
             var logs = await _logRepository.GetLogsAtIndex(indexStart, logsCount).ConfigureAwait(false);
             for (var i = 0; i < logsCount; i++)
             {
+                _logger.LogInformation($"RaftNode _stateMachine.Apply {counter}");
                 await _stateMachine.Apply(_logRepository, logEntry: logs[i].Entry, logIndex: indexStart + i, _logger, _logSerializer);
+                await _service.Value.Persist(default);
             }
         }
+        counter++;
     }
+
+    private int counter = 0;
+    private Lazy<IClusterPersistenceService> _service;
 
     private void UpdateTerm(int term)
     {
@@ -385,11 +419,8 @@ public class RaftNode : TaskLoop, IMessageArrivedHandler, IAsyncDisposable, IDur
 
         if (Status == RaftNodeStatus.Follower && _followerState != null)
         {
-            // When election timeout, start new election.
-            // ToDo: Allow for a longer window here on node start esp when the leader is already established - wait for membership for a bit
-            if (_time.Now > _followerState.LeaderTimeout)
+             if (_time.Now > _followerState.LeaderTimeout)
             {
-                _logger.LogInformation("Did not hear from leader within the alloted timeout {LeaderTimeout} - starting an election", _options.LeaderTimeout);
                 await StartElection();
                 idleRun = false;
             }

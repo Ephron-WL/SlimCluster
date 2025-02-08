@@ -18,8 +18,10 @@ public class RaftLeaderStateTests : AbstractRaftIntegrationTest, IAsyncLifetime
 
         _subject = new RaftLeaderState(
             XUnitLogger.CreateLogger<RaftLeaderState>(testOutputHelper),
+            _serviceProviderMock.Object,
             _term,
             _options,
+            _clusterOptions,
             _clusterMembershipMock.Object,
             _messageSenderMock.Object,
             _logRepositoryMock.Object,
@@ -28,7 +30,7 @@ public class RaftLeaderStateTests : AbstractRaftIntegrationTest, IAsyncLifetime
             new Time(),
             _onNewerTermDiscovered.Object);
 
-        _options.LeaderPingInterval = TimeSpan.FromSeconds(0.5);
+        _options.HeartbeatInterval = TimeSpan.FromSeconds(0.5);
     }
 
     public Task DisposeAsync() => _subject.Stop();
@@ -87,21 +89,21 @@ public class RaftLeaderStateTests : AbstractRaftIntegrationTest, IAsyncLifetime
             .Verify(x => x.SendRequest(
                 It.Is<AppendEntriesRequest>(r => r.PrevLogIndex == 0 && r.PrevLogTerm == 0 && r.Entries == null),
                 It.IsAny<IAddress>(),
-                _options.LeaderPingInterval),
+                _options.HeartbeatInterval),
                 Times.AtLeast(_otherMembers.Count));
 
         _messageSenderMock
             .Verify(x => x.SendRequest(
                 It.Is<AppendEntriesRequest>(r => r.PrevLogIndex == 0 && r.PrevLogTerm == 0 && r.Entries != null && r.Entries.Count == 1 && r.Entries.First().Entry == commandPayload),
                 It.IsAny<IAddress>(),
-                _options.LeaderPingInterval),
+                _options.HeartbeatInterval),
                 Times.Exactly(_otherMembers.Count));
 
         _messageSenderMock
             .Verify(x => x.SendRequest(
                 It.Is<AppendEntriesRequest>(r => r.PrevLogIndex == 1 && r.PrevLogTerm == 1 && r.Entries == null),
                 It.IsAny<IAddress>(),
-                _options.LeaderPingInterval),
+                _options.HeartbeatInterval),
                 Times.AtLeast(_otherMembers.Count));
 
         _messageSenderMock

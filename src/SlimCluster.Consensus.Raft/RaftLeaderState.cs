@@ -1,7 +1,12 @@
 ﻿namespace SlimCluster.Consensus.Raft;
 
+using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
+
+using Microsoft.Extensions.DependencyInjection;
+
 
 using SlimCluster.Consensus.Raft.Logs;
 using SlimCluster.Host.Common;
@@ -32,12 +37,14 @@ public delegate Task OnNewerTermDiscovered(int term, INode node);
 public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComponent
 {
     private readonly ILogger<RaftLeaderState> _logger;
+    private readonly IServiceProvider _serviceProvider;
     private readonly RaftConsensusOptions _options;
     private readonly IClusterMembership _clusterMembership;
     private readonly ILogRepository _logRepository;
     private readonly IStateMachine _stateMachine;
     private readonly IMessageSender _messageSender;
     private readonly ISerializer _logSerializer;
+    private readonly IClusterPersistenceService _clusterPersistenceService;
     private readonly ITime _time;
     private readonly OnNewerTermDiscovered _onNewerTermDiscovered;
     private readonly ConcurrentDictionary<int, TaskCompletionSource<object?>> _pendingCommandResults;
@@ -47,8 +54,11 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
 
     public RaftLeaderState(
         ILogger<RaftLeaderState> logger,
+        IServiceProvider serviceProvider,
         int term,
         RaftConsensusOptions options,
+        ClusterOptions clusterOptions,
+        //IClusterPersistenceService clusterPersistenceService,
         IClusterMembership clusterMembership,
         IMessageSender messageSender,
         ILogRepository logRepository,
@@ -56,18 +66,22 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
         ISerializer logSerializer,
         ITime time,
         OnNewerTermDiscovered onNewerTermDiscovered)
-        : base(logger)
+        : base(logger, clusterOptions)
     {
         _logger = logger;
+        _serviceProvider = serviceProvider;
         _options = options;
         _clusterMembership = clusterMembership;
         _logSerializer = logSerializer;
         _logRepository = logRepository;
         _stateMachine = stateMachine;
         _messageSender = messageSender;
+       // _clusterPersistenceService = clusterPersistenceService;
         _time = time;
         _onNewerTermDiscovered = onNewerTermDiscovered;
         _pendingCommandResults = new ConcurrentDictionary<int, TaskCompletionSource<object?>>();
+
+        _service = new Lazy<IClusterPersistenceService>(() => _serviceProvider.GetService<IClusterPersistenceService>());
 
         Term = term;
         ReplicationStateByNode = new Dictionary<string, FollowerReplicatonState>();
@@ -91,7 +105,7 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
             var sendFirstPing = followerReplicationState.LastAppendRequest == null; // never sent an AppendEntriesRequest yet
             // check if ping sent in longer while
             var sendPing = followerReplicationState.LastAppendRequest == null
-                || now >= followerReplicationState.LastAppendRequest.Value.Add(_options.LeaderPingInterval); // time to send ping to not get overthrown by another node
+                || now >= followerReplicationState.LastAppendRequest.Value.Add(_options.HeartbeatInterval); // time to send ping to not get overthrown by another node
 
             if (sendNewLogEntries || sendPing)
             {
@@ -125,7 +139,7 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
 
         var commitedIndex = _logRepository.CommitedIndex;
         var highestReplicatedIndex = FindMajorityReplicatedIndex();
-        if (highestReplicatedIndex >= commitedIndex)
+        if (highestReplicatedIndex > commitedIndex)
         {
             await ApplyLogs(commitedIndex, highestReplicatedIndex).ConfigureAwait(false);
             idleRun = false;
@@ -147,20 +161,24 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
             var index = logIndexStart + i;
 
             var commandResult = await _stateMachine.Apply(_logRepository, logEntry: logs[i].Entry, logIndex: index, _logger, _logSerializer);
+            await _service.Value.Persist(default);
 
             // Signal that this changed and pass result
             if (_pendingCommandResults.TryGetValue(index, out var tcs))
             {
                 _logger.LogDebug("Set result to {Result}", commandResult);
+                _logger.LogInformation("Set result to {Result}", commandResult);
                 tcs.TrySetResult(commandResult);
             }
         }
     }
 
+    private Lazy<IClusterPersistenceService> _service;
+
     private int GetMajorityCountMinusOne()
     {
         var majorityCount = _options.NodeCount / 2;
-           
+
         return majorityCount;
     }
 
@@ -208,7 +226,7 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
         {
             _logger.LogDebug("{Node}: Sending {MessageName} with PrevLogIndex = {PrevLogIndex}, PrevLogTerm = {PrevLogTerm}, LogCount = {LogCount}", followerNode, nameof(AppendEntriesRequest), req.PrevLogIndex, req.PrevLogTerm, req.Entries?.Count ?? 0);
             // Note: setting the request timeout to match the leader timeout - now point in waiting longer
-            var resp = await _messageSender.SendRequest(req, followerNode.Address, timeout: _options.LeaderPingInterval);
+            var resp = await _messageSender.SendRequest(req, followerNode.Address, timeout: _options.HeartbeatInterval);
 
             // when the response arrives, update the timestamp of when the request was sent
             followerReplicationState.LastAppendRequest = _time.Now;
@@ -238,10 +256,10 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
                 followerReplicationState.NextIndex--;
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException opCancelledEx)
         {
             // Will retry next time
-            _logger.LogWarning("{Node}: Did not recieve {MessageName} in time, will retry...", followerNode, nameof(AppendEntriesResponse));
+            _logger.LogWarning("{Node}: Did not receive {MessageName}, will retry... ({CancelReason})", followerNode, nameof(AppendEntriesResponse), opCancelledEx.Message);
 
             // The response did not arrive, account for the wait time we already lost to not keep on calling the possibly failed follower
             followerReplicationState.LastAppendRequest = _time.Now;
@@ -262,6 +280,9 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
         return replicatonState;
     }
 
+    private readonly Dictionary<LockRequestCommand, FifoLock> locks = new();
+    private readonly object _lock = new();
+
     public async Task<object?> OnClientRequest(object command, CancellationToken token)
     {
         using var _ = _logger.BeginScope("Command {Command} processing", command.GetType().Name);
@@ -270,6 +291,77 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
         if (_clusterMembership.Members.Count <= majorityCount)
         {
             throw new ClusterException("This node is not a member of a cluster having a quorum. While trying again may result in routing to a node having a quorum, there is no guarantee this will occur. To resolve, increase the number of nodes running in the cluster or address a possible network fragmentation.");
+        }
+
+        switch (command)
+        {
+            case LockRequestCommand lockRequest:
+
+                FifoLock fifoLock;
+                LockRequestCommand existingRequest;
+                KeyValuePair<LockRequestCommand, FifoLock> pair;
+                lock (_lock)
+                {
+                    pair = locks.SingleOrDefault(lock_ => lock_.Key.Name == lockRequest.Name);
+                    if (pair.Value is null)
+                    {
+                        fifoLock = new(_options.FifoLockTimeout);
+                        locks.Add(lockRequest, fifoLock);
+                        existingRequest = lockRequest;
+                    }
+                    else
+                    {
+                        if(pair.Key.Owner == lockRequest.Owner)
+                        {
+                            lockRequest.Result = true;
+                        }
+
+                        existingRequest = pair.Key;
+                        fifoLock = pair.Value;
+                    }
+                }
+
+                //try
+                //{
+                    if(!lockRequest.Result)
+                    {
+                        var lockResult = fifoLock.Enter();
+                        lockRequest.Result = lockResult;
+                    }
+                //}
+                //catch(OperationCanceledException ex)
+                //{
+                //    _logger.LogInformation($"Lock request timeout: lockRequest.Name: {lockRequest.Name} assigned to owner: {lockRequest.Owner}");
+                //    throw new ClusterException("The lock request timed out. Retry request.");
+                //}
+
+                if(lockRequest.Result)
+                {
+                    existingRequest.Owner = lockRequest.Owner;
+                }
+
+                _logger.LogInformation($"lockRequest.Name: {lockRequest.Name} assigned to owner: {lockRequest.Owner}");
+                break;
+
+            case LockReleaseCommand lockRelease:
+
+                lock (_lock)
+                {
+                    pair = locks.SingleOrDefault(lock_ => lock_.Key.Name.Equals(lockRelease.Name, StringComparison.CurrentCultureIgnoreCase) && lock_.Key.Owner.Equals(lockRelease.Owner, StringComparison.CurrentCultureIgnoreCase));
+                    if (pair.Value is not null)
+                    {
+                        _logger.LogInformation($"The lock was found. lock count: {locks.Count}. lockRequest.Name: {lockRelease.Name} assigned to host: {lockRelease.Owner}");
+
+                        fifoLock = pair.Value;
+                        fifoLock.Exit();
+                        locks.Remove(pair.Key);
+                        lockRelease.Result = true;
+
+                        _logger.LogInformation($"The lock was released.  lock count: {locks.Count}. lockRequest.Name: {lockRelease.Name} assigned to host: {lockRelease.Owner}");
+                    }
+                }
+
+                break;
         }
 
         // Append log to local node (must be thread-safe)
@@ -297,13 +389,11 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
                     return result;
                 }
             }
+            throw new ClusterException($"The state machine application process took too long. It must take less than {_options.RequestTimeout.TotalSeconds} seconds.  Despite this exceptions, state machine changes may still be successfully applied.");
         }
         catch (Exception ex)
         {
-            if(ex is OperationCanceledException)
-            {
-                throw new ClusterException();
-            }
+            _logger.LogInformation("OnClientRequest exception: {Exception}", ex.ToString());
             throw;
         }
         finally
@@ -314,7 +404,6 @@ public class RaftLeaderState : TaskLoop, IRaftClientRequestHandler, IDurableComp
             // Clean up pending commands
             _pendingCommandResults.TryRemove(commandIndex, out var _);
         }
-        return null;
     }
 
     #region IDurableComponent

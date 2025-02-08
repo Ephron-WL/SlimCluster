@@ -10,6 +10,7 @@ public static class StateMachineExtensions
         logger.LogTrace("Deserializing log at index {LogIndex}", logIndex);
         var command = logSerializer.Deserialize(logEntry);
         logger.LogDebug("Applying log at index {LogIndex}", logIndex);
+        logger.LogInformation("Applying command {command}", command);
         var commandResult = await stateMachine.Apply(command, logIndex).ConfigureAwait(false);
         logger.LogDebug("Commit log at index {LogIndex}", logIndex);
         await logRepository.Commit(logIndex).ConfigureAwait(false);

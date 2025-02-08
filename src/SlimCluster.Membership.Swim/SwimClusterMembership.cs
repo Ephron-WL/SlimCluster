@@ -72,7 +72,7 @@ public class SwimClusterMembership : TaskLoop, IClusterMembership, IClusterContr
         IOptions<ClusterOptions> clusterOptions,
         ITime time,
         IMessageSender messageSender)
-        : base(loggerFactory.CreateLogger<SwimClusterMembership>())
+        : base(loggerFactory.CreateLogger<SwimClusterMembership>(), clusterOptions.Value)
     {
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<SwimClusterMembership>();

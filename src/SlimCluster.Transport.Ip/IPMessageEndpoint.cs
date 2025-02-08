@@ -27,11 +27,12 @@ public class IPMessageEndpoint : TaskLoop, IMessageSender, IAsyncDisposable, ICl
     public IPMessageEndpoint(
         ILogger<IPMessageEndpoint> logger,
         IOptions<IpTransportOptions> options,
+        IOptions<ClusterOptions> clusterOptions,
         ISerializer serializer,
         IEnumerable<IMessageSendingHandler> messageSendingHandlers,
         IEnumerable<IMessageArrivedHandler> messageArrivedHandlers,
         Func<ISocketClient>? socketClientFactory = null)
-        : base(logger)
+        : base(logger, clusterOptions.Value)
     {
         _logger = logger;
         _options = options.Value;
@@ -142,7 +143,8 @@ public class IPMessageEndpoint : TaskLoop, IMessageSender, IAsyncDisposable, ICl
         _requests[requestId] = requestSource;
         try
         {
-            var timeoutTask = Task.Delay(timeout ?? _options.RequestTimeout);
+            var timeoutPeriod = timeout ?? _options.RequestTimeout;
+            var timeoutTask = Task.Delay(timeoutPeriod);
 
             // Send request
             await SendMessage(request, address).ConfigureAwait(false);
@@ -150,7 +152,7 @@ public class IPMessageEndpoint : TaskLoop, IMessageSender, IAsyncDisposable, ICl
             var finishedTask = await Task.WhenAny(requestSource.Task, timeoutTask).ConfigureAwait(false);
             if (finishedTask != requestSource.Task)
             {
-                throw new OperationCanceledException();
+                throw new OperationCanceledException($"Operation timed out in {timeoutPeriod}.");
             }
 
             var response = requestSource.Task.Result;

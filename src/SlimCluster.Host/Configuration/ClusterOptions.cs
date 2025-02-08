@@ -11,4 +11,7 @@ public class ClusterOptions
     /// The unique ID representing this node instance.
     /// </summary>
     public string NodeId { get; set; } = Guid.NewGuid().ToString();
+
+
+    public TimeSpan IdleLoopDelay { get; set; } = TimeSpan.FromMilliseconds(50);
 }

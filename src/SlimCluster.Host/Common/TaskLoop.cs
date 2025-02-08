@@ -1,9 +1,11 @@
 ﻿namespace SlimCluster.Host.Common;
 
+using Microsoft.Extensions.Options;
+
 public abstract class TaskLoop
 {
     private readonly ILogger _logger;
-    private readonly TimeSpan _idleLoopDelay;
+    private readonly ClusterOptions _options;
 
     private CancellationTokenSource? _loopCts;
     private Task? _loopTask;
@@ -13,16 +15,12 @@ public abstract class TaskLoop
 
     public bool IsStarted => _isStarted;
 
-    protected TaskLoop(ILogger logger, TimeSpan idleLoopDelay)
+    protected TaskLoop(ILogger logger, ClusterOptions options)
     {
         _logger = logger;
-        _idleLoopDelay = idleLoopDelay;
+        _options = options;
     }
 
-    protected TaskLoop(ILogger logger)
-        : this(logger, TimeSpan.FromMilliseconds(50))
-    {
-    }
     public async Task Start()
 
     {
@@ -95,7 +93,7 @@ public abstract class TaskLoop
                     var idleRun = await OnLoopRun(_loopCts.Token).ConfigureAwait(false);
                     if (idleRun)
                     {
-                        await Task.Delay(_idleLoopDelay).ConfigureAwait(false);
+                        await Task.Delay(_options.IdleLoopDelay).ConfigureAwait(false);
                     }
                 }
                 catch (Exception e)

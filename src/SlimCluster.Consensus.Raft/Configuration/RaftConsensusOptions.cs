@@ -16,12 +16,13 @@ public class RaftConsensusOptions
     /// <summary>
     /// Timeout after which a leader is considered dead (unless ApppendEntriesRequest arrives).
     /// </summary>
-    public TimeSpan LeaderTimeout { get; set; } = TimeSpan.FromSeconds(2);
+    // Not needed
+    //public TimeSpan LeaderTimeout { get; set; } = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// Time after which an empty AppendEntriesRequest must be sent to prevent Leader timout from happening.
     /// </summary>
-    public TimeSpan LeaderPingInterval { get; set; } = TimeSpan.FromMilliseconds(250);
+    public TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromMilliseconds(250);
 
     /// <summary>
     /// Defines the target cluster size. It is used to calculate majority of nodes.
@@ -37,4 +38,6 @@ public class RaftConsensusOptions
     /// The timeout for a leader to process the request.
     /// </summary>
     public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(10);
+
+    public TimeSpan FifoLockTimeout { get; set; } = TimeSpan.FromSeconds(30);
 }

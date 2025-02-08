@@ -1,5 +1,5 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: sc-service
   labels:
@@ -25,3 +25,34 @@ spec:
         env:
         - name: ASPNETCORE_URLS
           value: "http://+:8080"
+        volumeMounts:
+        # ConfigMap
+        - mountPath: /etc/config # path in pod in which ConfigMap's config-file.txt will be written
+          name: config-volume
+        # Ephemeral not supported during dev
+        # - mountPath: /etc/data # path in pod in which the emphemeral volume is mounted
+        #  name: my-ephemeral-volume
+        - mountPath: /data/pvc
+          name: pvc-volume
+        - mountPath: /data
+          name: my-volume
+      volumes:
+      - name: config-volume
+        configMap:
+          name: my-config
+      # - name: my-ephemeral-volume
+        # csi:
+        # driver: my-csi-driver
+        # volumeAttributes:
+        #   size: "1Gi"
+      - name: pvc-volume
+        persistentVolumeClaim:
+          claimName: local-pvc
+  volumeClaimTemplates:
+  - metadata:
+      name: my-volume
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi

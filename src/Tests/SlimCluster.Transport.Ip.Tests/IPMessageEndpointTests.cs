@@ -3,6 +3,7 @@
 public class IPMessageEndpointTests
 {
     private readonly IpTransportOptions _options;
+    private readonly ClusterOptions _clusterOptions;
     private readonly Mock<ISerializer> _serializerMock;
     private readonly Mock<IMessageSendingHandler> _messageSendingHandlerMock;
     private readonly Mock<IMessageArrivedHandler> _messageArrivedHandlerMock;
@@ -11,6 +12,7 @@ public class IPMessageEndpointTests
     public IPMessageEndpointTests()
     {
         _options = new IpTransportOptions();
+        _clusterOptions = new ClusterOptions();
         _serializerMock = new Mock<ISerializer>();
         _messageSendingHandlerMock = new Mock<IMessageSendingHandler>();
         _messageArrivedHandlerMock = new Mock<IMessageArrivedHandler>();
@@ -45,6 +47,7 @@ public class IPMessageEndpointTests
         await using var subject = new IPMessageEndpoint(
             NullLogger<IPMessageEndpoint>.Instance,
             Options.Create(_options),
+            Options.Create(_clusterOptions),
             _serializerMock.Object,
             new[] { _messageSendingHandlerMock.Object },
             new[] { _messageArrivedHandlerMock.Object },

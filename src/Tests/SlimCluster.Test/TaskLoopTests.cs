@@ -8,7 +8,7 @@ public class TaskLoopTests
 
     public TaskLoopTests()
     {
-        subjectMock = new Mock<TaskLoop>(NullLogger.Instance) { CallBase = true };
+        subjectMock = new Mock<TaskLoop>(NullLogger.Instance, new ClusterOptions()) { CallBase = true };
     }
 
     [Fact]

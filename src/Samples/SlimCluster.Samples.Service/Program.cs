@@ -3,6 +3,7 @@ using SlimCluster.AspNetCore;
 using SlimCluster.Consensus.Raft;
 using SlimCluster.Consensus.Raft.Logs;
 using SlimCluster.Membership.Swim;
+using SlimCluster.Persistence;
 using SlimCluster.Persistence.LocalFile;
 using SlimCluster.Samples.ConsoleApp;
 using SlimCluster.Samples.ConsoleApp.State.Logs;
@@ -22,6 +23,10 @@ builder.Services.AddHostedService<MainApp>();
 // doc:fragment:ExampleStartup
 builder.Services.AddSlimCluster(cfg =>
 {
+
+    //System.IO.File.WriteAllText("/data/pvc/Testing123-" + Guid.NewGuid().ToString(), "Testing");
+    //System.IO.File.WriteAllText("/data/Testing123-" + Guid.NewGuid().ToString(), "Testing");
+
     cfg.ClusterId = "MyCluster";
     // This will use the machine name, in Kubernetes this will be the pod name
     cfg.NodeId = Environment.MachineName;
@@ -37,7 +42,10 @@ builder.Services.AddSlimCluster(cfg =>
     cfg.AddJsonSerialization();
 
     // Cluster state will saved into the local json file in between node restarts
-    cfg.AddPersistenceUsingLocalFile("cluster-state.json");
+    var tempFilePath = Path.Combine(Path.GetTempPath(), "cluster-state.json");
+    Console.WriteLine($"Path.GetTempPath(): {Path.GetTempPath()}");
+    Console.WriteLine($"tempFilePath: {tempFilePath}");
+    cfg.AddPersistenceUsingLocalFile("cluster-state.json", Newtonsoft.Json.Formatting.Indented);
 
     // Setup Swim Cluster Membership
     cfg.AddSwimMembership(opts =>
@@ -49,12 +57,15 @@ builder.Services.AddSlimCluster(cfg =>
     cfg.AddRaftConsensus(opts =>
     {
         opts.NodeCount = 3;
-
+        
         // Use custom values or remove and use defaults
-        opts.LeaderTimeout = TimeSpan.FromSeconds(5f/8);
-        opts.LeaderPingInterval = TimeSpan.FromSeconds(2f/8);
-        opts.ElectionTimeoutMin = TimeSpan.FromSeconds(3f/8);
-        opts.ElectionTimeoutMax = TimeSpan.FromSeconds(6f/8);
+        //opts.LeaderTimeout = TimeSpan.FromSeconds(5f);
+        opts.HeartbeatInterval = TimeSpan.FromSeconds(2f);
+        opts.ElectionTimeoutMin = TimeSpan.FromSeconds(3f);
+        opts.ElectionTimeoutMax = TimeSpan.FromSeconds(6f);
+        opts.RequestTimeout = TimeSpan.FromSeconds(10f);
+        opts.FifoLockTimeout = TimeSpan.FromSeconds(30f);
+        
         // Can set a different log serializer, by default ISerializer is used (in our setup its JSON)
         // opts.LogSerializerType = typeof(JsonSerializer);
     });
@@ -68,7 +79,9 @@ builder.Services.AddSlimCluster(cfg =>
 
 // Raft app specific implementation
 builder.Services.AddSingleton<ILogRepository, InMemoryLogRepository>(); // For now, store the logs in memory only
-builder.Services.AddSingleton<IStateMachine, CounterStateMachine>(); // This is app specific machine that implements a distributed counter
+builder.Services.AddSingleton<CounterStateMachine>();
+builder.Services.AddSingleton<IStateMachine>(provider => provider.GetRequiredService<CounterStateMachine>()); // This is app specific machine that implements a distributed counter
+builder.Services.AddSingleton<IDurableComponent>(provider => provider.GetRequiredService<CounterStateMachine>());
 builder.Services.AddSingleton<ISerializationTypeAliasProvider, CommandSerializationTypeAliasProvider>(); // App specific state/logs command types for the replicated state machine
 
 // Requires packages: SlimCluster.Membership.Swim, SlimCluster.Consensus.Raft, SlimCluster.Serialization.Json, SlimCluster.Transport.Ip, SlimCluster.Persistence.LocalFile, SlimCluster.AspNetCore
@@ -81,11 +94,20 @@ builder.Services.AddTransient(svp => (ICounterState)svp.GetRequiredService<IStat
 
 var app = builder.Build();
 
+if (app.Services.GetService<IClusterPersistenceService>() is null)
+{
+    Console.WriteLine("IClusterPersistenceService is not available.");
+}
+else
+{
+    Console.WriteLine("IClusterPersistenceService is available.");
+}
+
 // Configure the HTTP request pipeline.
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.UseHttpsRedirection();
+//app.UseHttpsRedirection();
 
 app.UseAuthorization();
 
